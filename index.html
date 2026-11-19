@@ -79,19 +79,20 @@
   <div id="checkTab" class="panel active">
     <div class="card">
       <div class="controls">
-        <label class="btn btn-primary" for="photoInput">📷 Upload Screenshots</label>
+        <button class="btn btn-primary" onclick="pasteFromClipboard()">📋 Paste Photo Text</button>
+        <label class="btn" style="background:#334155; color:var(--text);" for="photoInput">📷 Photo</label>
         <input type="file" id="photoInput" accept="image/*,.jfif,.heic,.heif" multiple />
         <button class="btn btn-danger" onclick="resetDailyList()">🔄 Reset</button>
       </div>
       <div class="status-bar">
-        <span id="ocrStatus">Ready — select 1 to 3+ photos</span>
+        <span id="ocrStatus">Ready — copy text from photo & tap Paste</span>
         <span>Sorted A → Z</span>
       </div>
 
-      <details style="margin-top: 10px;">
-        <summary style="font-size: 0.85rem; color: var(--accent); cursor: pointer;">⚡ Or Paste Copied Text (Instant)</summary>
-        <textarea id="pasteInput" class="paste-box" rows="3" placeholder="Paste rows copied from iPhone Photos here..."></textarea>
-        <button class="btn btn-primary" style="width: 100%; margin-top: 6px; padding: 9px;" onclick="parsePastedText()">➕ Add Pasted List</button>
+      <details id="manualPasteBox" style="margin-top: 10px;">
+        <summary style="font-size: 0.85rem; color: var(--accent); cursor: pointer;">⌨️ Manual Paste Box</summary>
+        <textarea id="pasteInput" class="paste-box" rows="3" placeholder="Long-press here and tap Paste..."></textarea>
+        <button class="btn btn-primary" style="width: 100%; margin-top: 6px; padding: 9px;" onclick="parsePastedText()">➕ Extract Machines</button>
       </details>
     </div>
 
@@ -117,34 +118,6 @@
       btn.classList.add('active');
     }
 
-    // Automatically loads Tesseract from multiple backup CDNs if the first one is blocked
-    function ensureTesseractLoaded(statusEl) {
-      if (typeof Tesseract !== 'undefined') return Promise.resolve();
-
-      const urls = [
-        'https://jsdelivr.net',
-        'https://unpkg.com',
-        'https://cloudflare.com'
-      ];
-
-      return new Promise((resolve, reject) => {
-        let idx = 0;
-        function tryNext() {
-          if (typeof Tesseract !== 'undefined') return resolve();
-          if (idx >= urls.length) {
-            return reject(new Error('Network blocked OCR script. Try switching off work Wi-Fi or use Paste Text.'));
-          }
-          statusEl.textContent = `Loading scanner (source ${idx + 1}/${urls.length})...`;
-          const s = document.createElement('script');
-          s.src = urls.at(idx++);
-          s.onload = () => (typeof Tesseract !== 'undefined' ? resolve() : tryNext());
-          s.onerror = () => tryNext();
-          document.head.appendChild(s);
-        }
-        tryNext();
-      });
-    }
-
     function extractRowsFromText(rawText) {
       let added = 0;
       const lines = rawText.split(/\r?\n/);
@@ -153,7 +126,7 @@
         const clean = line.trim();
         if (!clean) return;
 
-        // Match Bank (e.g. N25) + Location (e.g. 01) even if OCR inserts spaces, pipes, dots, or dashes
+        // Match Bank (e.g. N25) + Location (e.g. 01) across spaces, tabs, pipes, or dashes
         const locMatch = clean.match(/\b([A-Z]\d{2})[^A-Z0-9\n]{1,6}(\d{2})\b/i);
         if (locMatch) {
           const bank = locMatch.at(1).toUpperCase();
@@ -184,6 +157,26 @@
       return added;
     }
 
+    async function pasteFromClipboard() {
+      const statusEl = document.getElementById('ocrStatus');
+      try {
+        const text = await navigator.clipboard.readText();
+        if (!text || !text.trim()) {
+          statusEl.textContent = 'Clipboard is empty — copy text from photo first.';
+          return;
+        }
+        const added = extractRowsFromText(text);
+        statusEl.textContent = added > 0
+          ? `Added ${added} machine(s)! Repeat for next photo.`
+          : 'No Bank-Location codes found in clipboard.';
+      } catch (err) {
+        // If Safari asks for manual paste, open the box automatically
+        document.getElementById('manualPasteBox').open = true;
+        document.getElementById('pasteInput').focus();
+        statusEl.textContent = 'Tap inside the box below and hit Paste.';
+      }
+    }
+
     function parsePastedText() {
       const box = document.getElementById('pasteInput');
       const statusEl = document.getElementById('ocrStatus');
@@ -191,9 +184,36 @@
 
       const added = extractRowsFromText(box.value);
       statusEl.textContent = added > 0
-        ? `Done! Added ${added} machine(s) from text.`
+        ? `Added ${added} machine(s)!`
         : 'No Bank-Location codes found in pasted text.';
       box.value = '';
+    }
+
+    // Loads Tesseract from your own GitHub repo folder first (./tesseract.min.js), then CDNs
+    function ensureTesseractLoaded(statusEl) {
+      if (typeof Tesseract !== 'undefined') return Promise.resolve();
+
+      const urls = [
+        './tesseract.min.js',
+        'https://jsdelivr.net',
+        'https://cloudflare.com'
+      ];
+
+      return new Promise((resolve, reject) => {
+        let idx = 0;
+        function tryNext() {
+          if (typeof Tesseract !== 'undefined') return resolve();
+          if (idx >= urls.length) {
+            return reject(new Error('OCR blocked on this network — use Paste Photo Text button.'));
+          }
+          const s = document.createElement('script');
+          s.src = urls.at(idx++);
+          s.onload = () => (typeof Tesseract !== 'undefined' ? resolve() : tryNext());
+          s.onerror = () => tryNext();
+          document.head.appendChild(s);
+        }
+        tryNext();
+      });
     }
 
     function prepareImage(file) {
@@ -213,10 +233,10 @@
             ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
             resolve(canvas.toDataURL('image/png'));
           };
-          img.onerror = () => reject(new Error(`Browser cannot decode file: ${file.name}`));
+          img.onerror = () => reject(new Error(`Cannot decode file: ${file.name}`));
           img.src = reader.result;
         };
-        reader.onerror = () => reject(new Error('Failed to read selected file'));
+        reader.onerror = () => reject(new Error('Failed to read file'));
         reader.readAsDataURL(file);
       });
     }
@@ -230,9 +250,9 @@
       let rawLog = [];
 
       try {
+        statusEl.textContent = 'Checking scanner...';
         await ensureTesseractLoaded(statusEl);
 
-        statusEl.textContent = 'Starting OCR engine...';
         const worker = await Tesseract.createWorker('eng', 1, {
           langPath: 'https://projectnaptha.com'
         });
@@ -253,8 +273,7 @@
 
         await worker.terminate();
       } catch (err) {
-        console.error(err);
-        statusEl.textContent = `Error: ${err.message || err}`;
+        statusEl.textContent = err.message || 'Scan failed — use Paste Photo Text.';
         e.target.value = '';
         return;
       }
