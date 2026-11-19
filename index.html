@@ -117,6 +117,34 @@
       btn.classList.add('active');
     }
 
+    // Automatically loads Tesseract from multiple backup CDNs if the first one is blocked
+    function ensureTesseractLoaded(statusEl) {
+      if (typeof Tesseract !== 'undefined') return Promise.resolve();
+
+      const urls = [
+        'https://jsdelivr.net',
+        'https://unpkg.com',
+        'https://cloudflare.com'
+      ];
+
+      return new Promise((resolve, reject) => {
+        let idx = 0;
+        function tryNext() {
+          if (typeof Tesseract !== 'undefined') return resolve();
+          if (idx >= urls.length) {
+            return reject(new Error('Network blocked OCR script. Try switching off work Wi-Fi or use Paste Text.'));
+          }
+          statusEl.textContent = `Loading scanner (source ${idx + 1}/${urls.length})...`;
+          const s = document.createElement('script');
+          s.src = urls.at(idx++);
+          s.onload = () => (typeof Tesseract !== 'undefined' ? resolve() : tryNext());
+          s.onerror = () => tryNext();
+          document.head.appendChild(s);
+        }
+        tryNext();
+      });
+    }
+
     function extractRowsFromText(rawText) {
       let added = 0;
       const lines = rawText.split(/\r?\n/);
@@ -168,7 +196,6 @@
       box.value = '';
     }
 
-    // Use FileReader DataURL so .jfif and mobile files decode reliably
     function prepareImage(file) {
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -199,17 +226,13 @@
       if (!files.length) return;
 
       const statusEl = document.getElementById('ocrStatus');
-      statusEl.textContent = `Selected ${files.length} file(s)...`;
-
-      if (typeof Tesseract === 'undefined') {
-        statusEl.textContent = 'OCR still loading—wait 2 seconds and try again.';
-        return;
-      }
-
       let addedCount = 0;
       let rawLog = [];
 
       try {
+        await ensureTesseractLoaded(statusEl);
+
+        statusEl.textContent = 'Starting OCR engine...';
         const worker = await Tesseract.createWorker('eng', 1, {
           langPath: 'https://projectnaptha.com'
         });
