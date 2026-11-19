@@ -6,8 +6,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <title>FST Floor Helper</title>
-  <script src="https://jsdelivr.net"
-          onerror="var s=document.createElement('script');s.src='https://cloudflare.com;"></script>
+  <script defer src="https://jsdelivr.net"></script>
   <style>
     :root {
       --bg: #0f172a;
@@ -32,6 +31,10 @@
     .panel { display: none; }
     .panel.active { display: block; }
     .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px; margin-bottom: 12px; }
+    textarea.paste-box {
+      width: 100%; background: #0f172a; color: var(--text); border: 1px solid var(--border);
+      border-radius: 8px; padding: 8px; font-size: 0.9rem; margin-top: 8px; resize: vertical;
+    }
     .controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
     .btn {
       padding: 12px 14px; border-radius: 10px; border: none; font-weight: 700;
@@ -84,6 +87,12 @@
         <span id="ocrStatus">Ready — select 1 to 3+ photos</span>
         <span>Sorted A → Z</span>
       </div>
+
+      <details style="margin-top: 10px;">
+        <summary style="font-size: 0.85rem; color: var(--accent); cursor: pointer;">⚡ Or Paste Copied Text (Instant)</summary>
+        <textarea id="pasteInput" class="paste-box" rows="3" placeholder="Paste rows copied from iPhone Photos here..."></textarea>
+        <button class="btn btn-primary" style="width: 100%; margin-top: 6px; padding: 9px;" onclick="parsePastedText()">➕ Add Pasted List</button>
+      </details>
     </div>
 
     <div id="checklistContainer"></div>
@@ -108,13 +117,63 @@
       btn.classList.add('active');
     }
 
-    // Prepare clean high-contrast image without excessive size so mobile scans fast
+    function extractRowsFromText(rawText) {
+      let added = 0;
+      const lines = rawText.split(/\r?\n/);
+
+      lines.forEach(line => {
+        const clean = line.trim();
+        if (!clean) return;
+
+        // Match Bank (e.g. N25) + Location (e.g. 01) separated by spaces, tabs, or dashes
+        const locMatch = clean.match(/\b([A-Z]\d{2})[\s\t|:\-]+(\d{2})\b/i);
+        if (locMatch) {
+          const bank = locMatch.at(1).toUpperCase();
+          const loc = locMatch.at(2);
+          const code = `${bank}-${loc}`;
+
+          // Match Time (e.g. 11:00:00 PM or 11:00 PM) on the same row
+          const timeMatch = clean.match(/\b(\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?)\b/i);
+          const timeStr = timeMatch ? timeMatch.at(1).toUpperCase() : '';
+
+          if (!machineList.some(item => item.code === code)) {
+            machineList.push({
+              id: Date.now() + Math.random(),
+              code: code,
+              time: timeStr,
+              checked: false,
+              note: ''
+            });
+            added++;
+          }
+        }
+      });
+
+      if (added > 0) {
+        machineList.sort((a, b) => a.code.localeCompare(b.code));
+        saveAndRender();
+      }
+      return added;
+    }
+
+    function parsePastedText() {
+      const box = document.getElementById('pasteInput');
+      const statusEl = document.getElementById('ocrStatus');
+      if (!box.value.trim()) return;
+
+      const added = extractRowsFromText(box.value);
+      statusEl.textContent = added > 0
+        ? `Done! Added ${added} machine(s) from text.`
+        : 'No Bank-Location codes found in pasted text.';
+      box.value = '';
+    }
+
     function prepareImage(file) {
       return new Promise((resolve, reject) => {
         const img = new Image();
         img.onload = () => {
           const canvas = document.createElement('canvas');
-          const targetW = Math.min(1200, Math.max(900, img.width));
+          const targetW = Math.min(1100, img.width);
           const scale = targetW / img.width;
           canvas.width = Math.round(img.width * scale);
           canvas.height = Math.round(img.height * scale);
@@ -123,7 +182,7 @@
           ctx.fillRect(0, 0, canvas.width, canvas.height);
           ctx.filter = 'grayscale(100%) contrast(150%)';
           ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-          resolve(canvas.toDataURL('image/png'));
+          resolve(canvas.toDataURL('image/jpeg', 0.85));
         };
         img.onerror = () => reject(new Error('Could not read image'));
         img.src = URL.createObjectURL(file);
@@ -135,10 +194,10 @@
       if (!files.length) return;
 
       const statusEl = document.getElementById('ocrStatus');
-      statusEl.textContent = 'Preparing scanner...';
+      statusEl.textContent = 'Loading fast OCR (~1.8 MB)...';
 
       if (typeof Tesseract === 'undefined') {
-        statusEl.textContent = 'Error: OCR script did not load. Refresh page with internet once.';
+        statusEl.textContent = 'OCR still loading—try again in 2 seconds or use Paste Text.';
         return;
       }
 
@@ -146,7 +205,10 @@
       let rawLog = [];
 
       try {
-        const worker = await Tesseract.createWorker('eng');
+        // Use lightweight 1.8MB fast language model instead of 15MB default
+        const worker = await Tesseract.createWorker('eng', 1, {
+          langPath: 'https://projectnaptha.com'
+        });
         await worker.setParameters({ tessedit_pageseg_mode: '6' });
 
         for (let i = 0; i < files.length; i++) {
@@ -155,35 +217,7 @@
           const result = await worker.recognize(imgData);
           const text = result.data.text || '';
           rawLog.push(text);
-
-          const lines = text.split(/\r?\n/);
-          lines.forEach(line => {
-            const clean = line.trim();
-            if (!clean) return;
-
-            // Match Bank (e.g. N25) + Location (e.g. 01) separated by spaces, tabs, or dashes
-            const locMatch = clean.match(/\b([A-Z]\d{2})[\s\t|:\-]+(\d{2})\b/i);
-            if (locMatch) {
-              const bank = locMatch.at(1).toUpperCase();
-              const loc = locMatch.at(2);
-              const code = `${bank}-${loc}`;
-
-              // Match Time (e.g. 11:00:00 PM or 11:00 PM) on the same row
-              const timeMatch = clean.match(/\b(\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?)\b/i);
-              const timeStr = timeMatch ? timeMatch.at(1).toUpperCase() : '';
-
-              if (!machineList.some(item => item.code === code)) {
-                machineList.push({
-                  id: Date.now() + Math.random(),
-                  code: code,
-                  time: timeStr,
-                  checked: false,
-                  note: ''
-                });
-                addedCount++;
-              }
-            }
-          });
+          addedCount += extractRowsFromText(text);
         }
 
         await worker.terminate();
@@ -193,9 +227,6 @@
         e.target.value = '';
         return;
       }
-
-      machineList.sort((a, b) => a.code.localeCompare(b.code));
-      saveAndRender();
 
       if (addedCount > 0) {
         statusEl.textContent = `Done! Added ${addedCount} machine(s).`;
