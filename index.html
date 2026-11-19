@@ -6,7 +6,8 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <title>FST Floor Helper</title>
-  <script src="https://jsdelivr.net"></script>
+  <script src="https://jsdelivr.net"
+          onerror="var s=document.createElement('script');s.src='https://cloudflare.com;"></script>
   <style>
     :root {
       --bg: #0f172a;
@@ -107,14 +108,16 @@
       btn.classList.add('active');
     }
 
-    function preprocessImage(file) {
+    // Prepare clean high-contrast image without excessive size so mobile scans fast
+    function prepareImage(file) {
       return new Promise((resolve, reject) => {
         const img = new Image();
         img.onload = () => {
           const canvas = document.createElement('canvas');
-          const scale = 2;
-          canvas.width = img.width * scale;
-          canvas.height = img.height * scale;
+          const targetW = Math.min(1200, Math.max(900, img.width));
+          const scale = targetW / img.width;
+          canvas.width = Math.round(img.width * scale);
+          canvas.height = Math.round(img.height * scale);
           const ctx = canvas.getContext('2d');
           ctx.fillStyle = '#ffffff';
           ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -122,7 +125,7 @@
           ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
           resolve(canvas.toDataURL('image/png'));
         };
-        img.onerror = () => reject(new Error('Could not load image file'));
+        img.onerror = () => reject(new Error('Could not read image'));
         img.src = URL.createObjectURL(file);
       });
     }
@@ -132,42 +135,40 @@
       if (!files.length) return;
 
       const statusEl = document.getElementById('ocrStatus');
-      statusEl.textContent = 'Starting OCR engine...';
+      statusEl.textContent = 'Preparing scanner...';
 
       if (typeof Tesseract === 'undefined') {
-        statusEl.textContent = 'Error: Tesseract OCR failed to load (check internet).';
+        statusEl.textContent = 'Error: OCR script did not load. Refresh page with internet once.';
         return;
       }
 
       let addedCount = 0;
-      let debugLines = [];
+      let rawLog = [];
 
-      for (let i = 0; i < files.length; i++) {
-        statusEl.textContent = `Reading photo ${i + 1} of ${files.length}...`;
-        try {
-          const processedImg = await preprocessImage(files.at(i));
-          const result = await Tesseract.recognize(processedImg, 'eng', {
-            logger: m => {
-              if (m.status === 'recognizing text') {
-                statusEl.textContent = `Photo ${i + 1}/${files.length}: ${Math.round(m.progress * 100)}%`;
-              }
-            }
-          });
+      try {
+        const worker = await Tesseract.createWorker('eng');
+        await worker.setParameters({ tessedit_pageseg_mode: '6' });
 
-          const lines = result.data.text.split('\n');
+        for (let i = 0; i < files.length; i++) {
+          statusEl.textContent = `Scanning photo ${i + 1} of ${files.length}...`;
+          const imgData = await prepareImage(files.at(i));
+          const result = await worker.recognize(imgData);
+          const text = result.data.text || '';
+          rawLog.push(text);
 
+          const lines = text.split(/\r?\n/);
           lines.forEach(line => {
             const clean = line.trim();
-            if (clean) debugLines.push(clean);
+            if (!clean) return;
 
-            // Matches Bank (e.g. N25) + Location (e.g. 01) across spaces or dashes
-            const locMatch = clean.match(/\b([A-Z]\d{2})[\s\-–—|:]+(\d{2})\b/i);
+            // Match Bank (e.g. N25) + Location (e.g. 01) separated by spaces, tabs, or dashes
+            const locMatch = clean.match(/\b([A-Z]\d{2})[\s\t|:\-]+(\d{2})\b/i);
             if (locMatch) {
               const bank = locMatch.at(1).toUpperCase();
               const loc = locMatch.at(2);
               const code = `${bank}-${loc}`;
 
-              // Matches Time (e.g. 11:00:00 PM or 11:00 PM) on the same row
+              // Match Time (e.g. 11:00:00 PM or 11:00 PM) on the same row
               const timeMatch = clean.match(/\b(\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?)\b/i);
               const timeStr = timeMatch ? timeMatch.at(1).toUpperCase() : '';
 
@@ -183,22 +184,23 @@
               }
             }
           });
-        } catch (err) {
-          console.error(err);
-          statusEl.textContent = `Error: ${err.message || err}`;
-          e.target.value = '';
-          return;
         }
+
+        await worker.terminate();
+      } catch (err) {
+        console.error(err);
+        statusEl.textContent = `Scan error: ${err.message || err}`;
+        e.target.value = '';
+        return;
       }
 
-      // Sort alphabetically by Bank-Location (A -> Z)
       machineList.sort((a, b) => a.code.localeCompare(b.code));
       saveAndRender();
 
       if (addedCount > 0) {
         statusEl.textContent = `Done! Added ${addedCount} machine(s).`;
       } else {
-        window._lastOcrText = debugLines.join('\n') || '(No text detected)';
+        window._lastOcrText = rawLog.join('\n---\n') || '(No text detected)';
         statusEl.innerHTML = `0 matches. <a href="#" style="color:var(--accent)" onclick="alert(window._lastOcrText);return false;">View raw scan</a>`;
       }
 
