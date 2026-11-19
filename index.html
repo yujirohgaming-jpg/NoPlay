@@ -1,0 +1,275 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>FST Floor Helper</title>
+  <script src="https://jsdelivr.net"></script>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --border: #334155;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --accent: #38bdf8;
+      --success: #22c55e;
+      --warn: #f59e0b;
+      --danger: #ef4444;
+    }
+    * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { margin: 0; padding: 14px; background: var(--bg); color: var(--text); padding-bottom: 60px; }
+    h1 { font-size: 1.25rem; margin: 0 0 12px 0; display: flex; justify-content: space-between; align-items: center; }
+    .tabs { display: flex; gap: 8px; margin-bottom: 14px; }
+    .tab-btn {
+      flex: 1; padding: 12px; border: 1px solid var(--border); background: var(--card);
+      color: var(--muted); border-radius: 10px; font-weight: 700; font-size: 0.95rem; cursor: pointer;
+    }
+    .tab-btn.active { background: var(--accent); color: #0f172a; border-color: var(--accent); }
+    .panel { display: none; }
+    .panel.active { display: block; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px; margin-bottom: 12px; }
+    .controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .btn {
+      padding: 12px 14px; border-radius: 10px; border: none; font-weight: 700;
+      font-size: 0.95rem; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    }
+    .btn-primary { background: var(--accent); color: #0f172a; flex: 1; }
+    .btn-danger { background: rgba(239, 68, 68, 0.18); color: #fca5a5; border: 1px solid var(--danger); }
+    .btn-note { background: #334155; color: var(--text); padding: 8px 12px; font-size: 0.85rem; }
+    .btn-note.has-note { background: rgba(245, 158, 11, 0.22); color: #fcd34d; border: 1px solid var(--warn); }
+    .status-bar { font-size: 0.85rem; color: var(--muted); margin-top: 8px; display: flex; justify-content: space-between; }
+    .item-row {
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+      padding: 12px; margin-bottom: 8px; transition: opacity 0.15s;
+    }
+    .item-row.checked { opacity: 0.55; border-color: var(--success); }
+    .item-left { display: flex; align-items: center; gap: 12px; flex: 1; cursor: pointer; }
+    .chk-box {
+      width: 28px; height: 28px; border-radius: 8px; border: 2px solid var(--accent);
+      display: flex; align-items: center; justify-content: center; font-size: 1.1rem; flex-shrink: 0;
+    }
+    .item-row.checked .chk-box { background: var(--success); border-color: var(--success); color: #052e16; font-weight: 900; }
+    .loc-code { font-size: 1.15rem; font-weight: 800; letter-spacing: 0.5px; }
+    .item-row.checked .loc-code { text-decoration: line-through; }
+    .time-tag { font-size: 0.8rem; color: var(--muted); margin-top: 2px; }
+    .note-preview { font-size: 0.82rem; color: #fcd34d; margin-top: 4px; word-break: break-word; }
+    input[type="file"] { display: none; }
+  </style>
+</head>
+<body>
+  <h1>
+    <span>🎰 FST Floor Helper</span>
+    <span id="counterBadge" style="font-size: 0.9rem; color: var(--accent);">0 / 0</span>
+  </h1>
+
+  <div class="tabs">
+    <button class="tab-btn active" onclick="switchTab('checkTab', this)">📋 Floor Check</button>
+    <button class="tab-btn" onclick="switchTab('swapTab', this)">💵 Cashbox Email</button>
+  </div>
+
+  <!-- TAB 1: MACHINE FLOOR CHECKLIST -->
+  <div id="checkTab" class="panel active">
+    <div class="card">
+      <div class="controls">
+        <label class="btn btn-primary" for="photoInput">📷 Upload Screenshots</label>
+        <input type="file" id="photoInput" accept="image/*" multiple />
+        <button class="btn btn-danger" onclick="resetDailyList()">🔄 Reset</button>
+      </div>
+      <div class="status-bar">
+        <span id="ocrStatus">Ready — select 1 to 3+ photos</span>
+        <span>Sorted A → Z</span>
+      </div>
+    </div>
+
+    <div id="checklistContainer"></div>
+  </div>
+
+  <!-- TAB 2: CASHBOX SWAP EMAIL (READY FOR PHASE 2) -->
+  <div id="swapTab" class="panel">
+    <div class="card">
+      <p style="margin: 0; color: var(--muted); font-size: 0.92rem;">
+        Cashbox Swap Email Generator will be plugged in here next!
+      </p>
+    </div>
+  </div>
+  <script>
+    const STORAGE_KEY = 'fst_floor_checklist_v1';
+    let machineList = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+
+    function switchTab(tabId, btn) {
+      document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.getElementById(tabId).classList.add('active');
+      btn.classList.add('active');
+    }
+
+    function preprocessImage(file) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const scale = 2;
+          canvas.width = img.width * scale;
+          canvas.height = img.height * scale;
+          const ctx = canvas.getContext('2d');
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.filter = 'grayscale(100%) contrast(150%)';
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          resolve(canvas.toDataURL('image/png'));
+        };
+        img.onerror = () => reject(new Error('Could not load image file'));
+        img.src = URL.createObjectURL(file);
+      });
+    }
+
+    document.getElementById('photoInput').addEventListener('change', async function (e) {
+      const files = Array.from(e.target.files);
+      if (!files.length) return;
+
+      const statusEl = document.getElementById('ocrStatus');
+      statusEl.textContent = 'Starting OCR engine...';
+
+      if (typeof Tesseract === 'undefined') {
+        statusEl.textContent = 'Error: Tesseract OCR failed to load (check internet).';
+        return;
+      }
+
+      let addedCount = 0;
+      let debugLines = [];
+
+      for (let i = 0; i < files.length; i++) {
+        statusEl.textContent = `Reading photo ${i + 1} of ${files.length}...`;
+        try {
+          const processedImg = await preprocessImage(files.at(i));
+          const result = await Tesseract.recognize(processedImg, 'eng', {
+            logger: m => {
+              if (m.status === 'recognizing text') {
+                statusEl.textContent = `Photo ${i + 1}/${files.length}: ${Math.round(m.progress * 100)}%`;
+              }
+            }
+          });
+
+          const lines = result.data.text.split('\n');
+
+          lines.forEach(line => {
+            const clean = line.trim();
+            if (clean) debugLines.push(clean);
+
+            // Matches Bank (e.g. N25) + Location (e.g. 01) across spaces or dashes
+            const locMatch = clean.match(/\b([A-Z]\d{2})[\s\-–—|:]+(\d{2})\b/i);
+            if (locMatch) {
+              const bank = locMatch.at(1).toUpperCase();
+              const loc = locMatch.at(2);
+              const code = `${bank}-${loc}`;
+
+              // Matches Time (e.g. 11:00:00 PM or 11:00 PM) on the same row
+              const timeMatch = clean.match(/\b(\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?)\b/i);
+              const timeStr = timeMatch ? timeMatch.at(1).toUpperCase() : '';
+
+              if (!machineList.some(item => item.code === code)) {
+                machineList.push({
+                  id: Date.now() + Math.random(),
+                  code: code,
+                  time: timeStr,
+                  checked: false,
+                  note: ''
+                });
+                addedCount++;
+              }
+            }
+          });
+        } catch (err) {
+          console.error(err);
+          statusEl.textContent = `Error: ${err.message || err}`;
+          e.target.value = '';
+          return;
+        }
+      }
+
+      // Sort alphabetically by Bank-Location (A -> Z)
+      machineList.sort((a, b) => a.code.localeCompare(b.code));
+      saveAndRender();
+
+      if (addedCount > 0) {
+        statusEl.textContent = `Done! Added ${addedCount} machine(s).`;
+      } else {
+        window._lastOcrText = debugLines.join('\n') || '(No text detected)';
+        statusEl.innerHTML = `0 matches. <a href="#" style="color:var(--accent)" onclick="alert(window._lastOcrText);return false;">View raw scan</a>`;
+      }
+
+      e.target.value = '';
+    });
+    function toggleCheck(id) {
+      const item = machineList.find(m => m.id === id);
+      if (item) {
+        item.checked = !item.checked;
+        saveAndRender();
+      }
+    }
+
+    function editNote(id) {
+      const item = machineList.find(m => m.id === id);
+      if (!item) return;
+      const input = prompt(`Error / Note for ${item.code}:`, item.note || '');
+      if (input !== null) {
+        item.note = input.trim();
+        saveAndRender();
+      }
+    }
+
+    function resetDailyList() {
+      if (!machineList.length) return;
+      if (confirm('Clear all machines and notes for a new shift?')) {
+        machineList = [];
+        saveAndRender();
+        document.getElementById('ocrStatus').textContent = 'List cleared — ready for new photos';
+      }
+    }
+
+    function saveAndRender() {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(machineList));
+      const container = document.getElementById('checklistContainer');
+      const badge = document.getElementById('counterBadge');
+
+      const doneCount = machineList.filter(m => m.checked).length;
+      badge.textContent = `${doneCount} / ${machineList.length}`;
+
+      if (!machineList.length) {
+        container.innerHTML = `<div class="card" style="text-align:center; color:var(--muted); padding:24px;">
+          No machines loaded yet.<br>Tap <b>Upload Screenshots</b> above to start.
+        </div>`;
+        return;
+      }
+
+      container.innerHTML = machineList.map(item => `
+        <div class="item-row ${item.checked ? 'checked' : ''}">
+          <div class="item-left" onclick="toggleCheck(${item.id})">
+            <div class="chk-box">${item.checked ? '✓' : ''}</div>
+            <div>
+              <div class="loc-code">${item.code}</div>
+              ${item.time ? `<div class="time-tag">🕒 ${item.time}</div>` : ''}
+              ${item.note ? `<div class="note-preview">⚠️ ${escapeHtml(item.note)}</div>` : ''}
+            </div>
+          </div>
+          <button class="btn btn-note ${item.note ? 'has-note' : ''}" onclick="editNote(${item.id})">
+            ${item.note ? '✏️ Note' : '+ Note'}
+          </button>
+        </div>
+      `).join('');
+    }
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    // Load saved checklist on startup
+    saveAndRender();
+  </script>
+</body>
+</html>
